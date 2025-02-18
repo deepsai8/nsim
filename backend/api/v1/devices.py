@@ -7,10 +7,10 @@ router = APIRouter()
 # Global variables: the single Unity WebSocket connection and a simple state store.
 unity_ws = None
 device_states = {
-    "lamp": False,
+    "lamp": True,
     "tv": False,
     "radio": False,
-    "kitchenlight": False,
+    "kitchenlight": True,
 }
 
 class DeviceCommand(BaseModel):
