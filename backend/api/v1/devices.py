@@ -16,27 +16,27 @@ if USE_REDIS:
 else:
     # In-memory fallback for device states.
     device_states = {
-        "lamp": True,
-        "tv": False,
-        "radio": False,
-        "kitchenlight": True,
-        "tv_volume": 50,       # Default volume percentage (0-100)
-        "radio_volume": 6,    # Default volume percentage (0-100)
+        "lamp_status": "on",         # "on" or "off"
+        "tv_status": "off",
+        "radio_status": "off",
+        "kitchenlight_status": "on",
+        "tv_volume": "50",           # Volume percentage as string
+        "radio_volume": "6",
     }
     print("Using in-memory device state storage.")
 
 # Helper functions to get and set device status.
-def get_device_status(device: str) -> str:
+def get_device_status(key: str) -> str:
     if USE_REDIS:
-        return r.get(device) or "off"
+        return r.get(key) or "off"
     else:
-        return str(device_states.get(device, "off"))
+        return str(device_states.get(key, "off"))
 
-def set_device_status(device: str, state: str):
+def set_device_status(key: str, state: str):
     if USE_REDIS:
-        r.set(device, state)
+        r.set(key, state)
     else:
-        device_states[device] = state
+        device_states[key] = state
 
 # Global variable for the Unity WebSocket connection.
 unity_ws = None
@@ -45,7 +45,7 @@ class DeviceCommand(BaseModel):
     state: str  # Expected values: "on" or "off"
 
 class VolumeCommand(BaseModel):
-    change: float  # Percentage change, e.g., 10 or -5
+    change: float  # Percentage change (can be positive or negative)
 
 # -----------------------------------------------------------
 # WebSocket Endpoint
@@ -59,36 +59,39 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             data = await websocket.receive_text()
             print(f"Received from Unity: {data}")
-            # Expected format: "device:status:on" or "device:status:off"
+            # Now we expect the message format: {device}:{property}:{value}
             parts = data.split(":")
-            if len(parts) == 3 and parts[1] == "status":
+            if len(parts) == 3:
                 device = parts[0].lower()
-                state = parts[2].lower()  # "on" or "off" or volume (as string)
-                set_device_status(device, state)
+                prop = parts[1].lower()  # e.g. "status", "volume", etc.
+                value = parts[2].lower()
+                key = f"{device}_{prop}"
+                set_device_status(key, value)
     except WebSocketDisconnect:
         print("Unity disconnected")
         unity_ws = None
 
 # -----------------------------------------------------------
-# Existing Endpoints (Lamp, TV, Radio, Kitchen Light)
+# Device Endpoints (Lamp, TV, Radio, Kitchen Light)
 # -----------------------------------------------------------
+
 @router.post("/lamp")
 async def toggle_lamp(command: DeviceCommand):
     global unity_ws
     if unity_ws is None:
         return {"error": "Unity client not connected"}
     desired_state = command.state.lower()
-    current_state = get_device_status("lamp")
+    current_state = get_device_status("lamp_status")
     if current_state == desired_state:
         return {"message": f"Lamp is already {desired_state}."}
-    message = f"lamp:{command.state}"
+    message = f"lamp:status:{command.state}"
     await unity_ws.send_text(message)
-    set_device_status("lamp", desired_state)
+    set_device_status("lamp_status", desired_state)
     return {"message": "Command sent", "command": message}
 
 @router.get("/lamp/status")
 async def get_lamp_status():
-    state = get_device_status("lamp")
+    state = get_device_status("lamp_status")
     return {"lamp": state == "on"}
 
 # -----------------------------------------------------------
@@ -97,77 +100,29 @@ async def get_lamp_status():
 @router.post("/tv")
 async def toggle_tv(command: DeviceCommand):
     global unity_ws
-    if (unity_ws is None):
+    if unity_ws is None:
         return {"error": "Unity client not connected"}
     desired_state = command.state.lower()
-    current_state = get_device_status("tv")
+    current_state = get_device_status("tv_status")
     if current_state == desired_state:
         return {"message": f"TV is already {desired_state}."}
-    message = f"tv:{command.state}"
+    message = f"tv:status:{command.state}"
     await unity_ws.send_text(message)
-    set_device_status("tv", desired_state)
+    set_device_status("tv_status", desired_state)
     return {"message": "Command sent", "command": message}
 
 @router.get("/tv/status")
 async def get_tv_status():
-    state = get_device_status("tv")
+    state = get_device_status("tv_status")
     return {"tv": state == "on"}
 
-# -----------------------------------------------------------
-# Radio Endpoints
-# -----------------------------------------------------------
-@router.post("/radio")
-async def toggle_radio(command: DeviceCommand):
-    global unity_ws
-    if (unity_ws is None):
-        return {"error": "Unity client not connected"}
-    desired_state = command.state.lower()
-    current_state = get_device_status("radio")
-    if current_state == desired_state:
-        return {"message": f"Radio is already {desired_state}."}
-    message = f"radio:{command.state}"
-    await unity_ws.send_text(message)
-    set_device_status("radio", desired_state)
-    return {"message": "Command sent", "command": message}
-
-@router.get("/radio/status")
-async def get_radio_status():
-    state = get_device_status("radio")
-    return {"radio": state == "on"}
-
-# -----------------------------------------------------------
-# Kitchen Wall Light Endpoints
-# -----------------------------------------------------------
-@router.post("/kitchenlight")
-async def toggle_kitchen_light(command: DeviceCommand):
-    global unity_ws
-    if (unity_ws is None):
-        return {"error": "Unity client not connected"}
-    desired_state = command.state.lower()
-    current_state = get_device_status("kitchenlight")
-    if current_state == desired_state:
-        return {"message": f"Kitchen lights are already {desired_state}."}
-    message = f"kitchenlight:{command.state}"
-    await unity_ws.send_text(message)
-    set_device_status("kitchenlight", desired_state)
-    return {"message": "Command sent", "command": message}
-
-@router.get("/kitchenlight/status")
-async def get_kitchen_light_status():
-    state = get_device_status("kitchenlight")
-    return {"kitchenlight": state == "on"}
-
-# -----------------------------------------------------------
-# Volume Endpoints for TV and Radio
-# -----------------------------------------------------------
 @router.post("/tv/volume")
 async def change_tv_volume(command: VolumeCommand):
     global unity_ws
-    if (unity_ws is None):
+    if unity_ws is None:
         return {"error": "Unity client not connected"}
-    message = f"tvvolume:{command.change}"
+    message = f"tv:volume:{command.change}"
     await unity_ws.send_text(message)
-    # Update stored TV volume.
     try:
         current_vol = int(get_device_status("tv_volume"))
     except:
@@ -185,12 +140,34 @@ async def get_tv_volume():
         vol_int = 50
     return {"tv_volume": vol_int}
 
+# -----------------------------------------------------------
+# Radio Endpoints
+# -----------------------------------------------------------
+@router.post("/radio")
+async def toggle_radio(command: DeviceCommand):
+    global unity_ws
+    if unity_ws is None:
+        return {"error": "Unity client not connected"}
+    desired_state = command.state.lower()
+    current_state = get_device_status("radio_status")
+    if current_state == desired_state:
+        return {"message": f"Radio is already {desired_state}."}
+    message = f"radio:status:{command.state}"
+    await unity_ws.send_text(message)
+    set_device_status("radio_status", desired_state)
+    return {"message": "Command sent", "command": message}
+
+@router.get("/radio/status")
+async def get_radio_status():
+    state = get_device_status("radio_status")
+    return {"radio": state == "on"}
+
 @router.post("/radio/volume")
 async def change_radio_volume(command: VolumeCommand):
     global unity_ws
-    if (unity_ws is None):
+    if unity_ws is None:
         return {"error": "Unity client not connected"}
-    message = f"radiovolume:{command.change}"
+    message = f"radio:volume:{command.change}"
     await unity_ws.send_text(message)
     try:
         current_vol = int(get_device_status("radio_volume"))
@@ -208,3 +185,25 @@ async def get_radio_volume():
     except:
         vol_int = 6
     return {"radio_volume": vol_int}
+
+# -----------------------------------------------------------
+# Kitchen Wall Light Endpoints
+# -----------------------------------------------------------
+@router.post("/kitchenlight")
+async def toggle_kitchen_light(command: DeviceCommand):
+    global unity_ws
+    if unity_ws is None:
+        return {"error": "Unity client not connected"}
+    desired_state = command.state.lower()
+    current_state = get_device_status("kitchenlight_status")
+    if current_state == desired_state:
+        return {"message": f"Kitchen lights are already {desired_state}."}
+    message = f"kitchenlight:status:{command.state}"
+    await unity_ws.send_text(message)
+    set_device_status("kitchenlight_status", desired_state)
+    return {"message": "Command sent", "command": message}
+
+@router.get("/kitchenlight/status")
+async def get_kitchen_light_status():
+    state = get_device_status("kitchenlight_status")
+    return {"kitchenlight": state == "on"}
